@@ -4,25 +4,68 @@ services:
   n8n:
     image: n8nio/n8n
     restart: unless-stopped
-    ports:
-      - "5678:5678"
-
+    expose:
+      - "5678" 
     env_file:
       - .env
-
     volumes:
       - ./n8n_data:/home/node/.n8n
     depends_on:
       - postgres
+    networks:
+      - n8n_network
 
   postgres:
-    image: postgres:13
+    image: postgres:13-alpine
     restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - n8n_network
+
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates
+      - ./nginx/letsencrypt:/etc/letsencrypt
+      - ./nginx/www:/var/www/certbot
+    environment:
+      - DOMAIN=${DOMAIN}
+      - EMAIL=${EMAIL}
+    command: >
+      sh -c "
+      mkdir -p /etc/nginx/conf.d &&
+      envsubst '$$DOMAIN $$EMAIL' < /etc/nginx/templates/n8n.conf.template > /etc/nginx/conf.d/default.conf &&
+      exec nginx -g 'daemon off;'
+      "
+    
+    depends_on:
+      - n8n
+    networks:
+      - n8n_network
+
+  # ===== Certbot для Let's Encrypt =====
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - ./nginx/letsencrypt:/etc/letsencrypt
+      - ./nginx/www:/var/www/certbot
+    entrypoint: |
+      sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $!; done;'
+    networks:
+      - n8n_network
 
 volumes:
   n8n_data:
   postgres_data:
+
+networks:
+  n8n_network:
+    driver: bridge
